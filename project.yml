@@ -1,0 +1,50 @@
+name: Toma
+options:
+  bundleIdPrefix: com.arthur
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Toma:
+    type: application
+    platform: iOS
+    sources:
+      - path: Toma
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.arthur.toma
+        PRODUCT_NAME: Toma
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_PREVIEWS: NO
+    info:
+      path: Support/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: es
+        CFBundleDisplayName: Toma
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        NSCameraUsageDescription: Toma usa la cámara para tomar tus fotos y videos.
+        NSMicrophoneUsageDescription: Toma usa el micrófono para grabar el audio de tus videos.
+        NSPhotoLibraryAddUsageDescription: Toma guarda tus fotos y videos en tu fototeca.
+schemes:
+  Toma:
+    build:
+      targets:
+        Toma: all
