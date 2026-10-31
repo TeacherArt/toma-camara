@@ -136,7 +136,22 @@ final class CameraService: NSObject, ObservableObject {
 
     // MARK: Configuración de la sesión (sessionQueue)
 
+    /// Si AVFoundation rechaza algún ajuste, se muestra el error en pantalla en vez de cerrar la app.
     private func configure(front: Bool, mode: CaptureMode, maxRes: Bool) {
+        let failure = ExceptionCatcher.catchException {
+            self.configureUnsafe(front: front, mode: mode, maxRes: maxRes)
+        }
+        if let failure {
+            _ = ExceptionCatcher.catchException { self.session.commitConfiguration() }
+            report("Error de cámara: \(failure)")
+        }
+    }
+
+    private func report(_ message: String) {
+        DispatchQueue.main.async { self.toast(message) }
+    }
+
+    private func configureUnsafe(front: Bool, mode: CaptureMode, maxRes: Bool) {
         session.beginConfiguration()
 
         if let current = videoInput {
@@ -171,10 +186,8 @@ final class CameraService: NSObject, ObservableObject {
             if !session.outputs.contains(photoOutput), session.canAddOutput(photoOutput) {
                 session.addOutput(photoOutput)
             }
-            videoOutput.deliversPreviewSizedOutputBuffers = true
         } else {
             if session.outputs.contains(photoOutput) { session.removeOutput(photoOutput) }
-            videoOutput.deliversPreviewSizedOutputBuffers = false
             if let format = Self.bestVideoFormat(for: device) {
                 do {
                     try device.lockForConfiguration()
@@ -340,9 +353,15 @@ final class CameraService: NSObject, ObservableObject {
         maxResolution = on
         sessionQueue.async {
             guard let device = self.videoInput?.device, self.session.outputs.contains(self.photoOutput) else { return }
-            self.session.beginConfiguration()
-            self.configurePhotoOutput(device: device, maxRes: on)
-            self.session.commitConfiguration()
+            let failure = ExceptionCatcher.catchException {
+                self.session.beginConfiguration()
+                self.configurePhotoOutput(device: device, maxRes: on)
+                self.session.commitConfiguration()
+            }
+            if let failure {
+                _ = ExceptionCatcher.catchException { self.session.commitConfiguration() }
+                self.report("Error de cámara: \(failure)")
+            }
         }
         toast(on ? "Fotos a máxima resolución (48 MP)" : "Fotos a 24 MP")
     }
@@ -420,7 +439,13 @@ final class CameraService: NSObject, ObservableObject {
                 }
             }
             self.inFlight[id] = processor
-            self.photoOutput.capturePhoto(with: settings, delegate: processor)
+            let failure = ExceptionCatcher.catchException {
+                self.photoOutput.capturePhoto(with: settings, delegate: processor)
+            }
+            if let failure {
+                self.inFlight[id] = nil
+                self.report("Error al tomar la foto: \(failure)")
+            }
         }
     }
 
@@ -434,11 +459,14 @@ final class CameraService: NSObject, ObservableObject {
                 audioSettings = self.audioOutput.recommendedAudioSettingsForAssetWriter(writingTo: .mov) as? [String: Any]
             }
             self.videoQueue.async {
-                do {
-                    try self.recorder.prepare(kinds: kinds, audioSettings: audioSettings)
+                var prepared = false
+                let failure = ExceptionCatcher.catchException {
+                    prepared = (try? self.recorder.prepare(kinds: kinds, audioSettings: audioSettings)) != nil
+                }
+                if prepared, failure == nil {
                     DispatchQueue.main.async { self.didBeginRecording() }
-                } catch {
-                    DispatchQueue.main.async { self.toast("No se pudo iniciar la grabación") }
+                } else {
+                    self.report("No se pudo iniciar la grabación\(failure.map { ": \($0)" } ?? "")")
                 }
             }
         }
@@ -477,7 +505,7 @@ final class CameraService: NSObject, ObservableObject {
 extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         if output === audioOutput {
-            recorder.appendAudio(sampleBuffer)
+            _ = ExceptionCatcher.catchException { self.recorder.appendAudio(sampleBuffer) }
             return
         }
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -498,11 +526,11 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         }
 
         if recorder.isActive {
-            recorder.appendVideo(frame,
-                                 time: CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
-                                 style: currentStyle,
-                                 grainOffset: grainOffset,
-                                 context: renderContext)
+            let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            _ = ExceptionCatcher.catchException {
+                self.recorder.appendVideo(frame, time: time, style: currentStyle,
+                                          grainOffset: grainOffset, context: self.renderContext)
+            }
         }
     }
 }
