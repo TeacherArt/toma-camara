@@ -1,10 +1,24 @@
 import AVFoundation
 import CoreImage
+import CoreLocation
 import ImageIO
 import UIKit
 
-enum CaptureMode: String {
-    case photo, video
+enum CaptureMode: String, CaseIterable, Identifiable {
+    case video, photo, g7x, raw
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .video: return "VIDEO"
+        case .photo: return "FOTO"
+        case .g7x: return "G7X"
+        case .raw: return "RAW"
+        }
+    }
+
+    var isPhoto: Bool { self != .video }
 }
 
 enum FlashSetting: CaseIterable {
@@ -41,15 +55,52 @@ struct ShotInfo {
     var focal35: Int?
     var lens: String?
     var isFront = false
+    var location: CLLocation?
+
+    init() {}
+
+    /// Lee los datos de la toma (EXIF y GPS) de los metadatos de una foto.
+    init(metadata: [String: Any], front: Bool = false) {
+        isFront = front
+        if let exif = metadata[kCGImagePropertyExifDictionary as String] as? [String: Any] {
+            iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [NSNumber])?.first?.intValue
+            exposure = (exif[kCGImagePropertyExifExposureTime as String] as? NSNumber)?.doubleValue
+            aperture = (exif[kCGImagePropertyExifFNumber as String] as? NSNumber)?.doubleValue
+            focal35 = (exif[kCGImagePropertyExifFocalLenIn35mmFilm as String] as? NSNumber)?.intValue
+            lens = exif[kCGImagePropertyExifLensModel as String] as? String
+            if let original = exif[kCGImagePropertyExifDateTimeOriginal as String] as? String {
+                let formatter = DateFormatter()
+                formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+                if let parsed = formatter.date(from: original) { date = parsed }
+            }
+        }
+        if let gps = metadata[kCGImagePropertyGPSDictionary as String] as? [String: Any],
+           let lat = (gps[kCGImagePropertyGPSLatitude as String] as? NSNumber)?.doubleValue,
+           let lon = (gps[kCGImagePropertyGPSLongitude as String] as? NSNumber)?.doubleValue {
+            let latRef = gps[kCGImagePropertyGPSLatitudeRef as String] as? String ?? "N"
+            let lonRef = gps[kCGImagePropertyGPSLongitudeRef as String] as? String ?? "E"
+            location = CLLocation(latitude: latRef == "S" ? -lat : lat, longitude: lonRef == "W" ? -lon : lon)
+        }
+    }
+
+    init(imageData: Data) {
+        if let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any] {
+            self.init(metadata: props)
+        } else {
+            self.init()
+        }
+    }
 }
 
 struct CapturedShot: Identifiable {
     let id = UUID()
     let image: CIImage
     let info: ShotInfo
+    let raw: Data?
 }
 
-/// Controla la cámara: sesión, vista previa con estilo en vivo, fotos y video doble.
+/// Controla la cámara: sesión, vista previa con estilo en vivo, fotos, RAW y video doble.
 final class CameraService: NSObject, ObservableObject {
     // MARK: Estado para la interfaz (hilo principal)
     @Published private(set) var mode: CaptureMode = .photo
@@ -58,16 +109,14 @@ final class CameraService: NSObject, ObservableObject {
     @Published private(set) var isFront = false
     @Published private(set) var zoomStops: [CGFloat] = [1]
     @Published private(set) var zoomDisplay: CGFloat = 1
-    @Published var style: LookStyle = .film {
-        didSet {
-            let newStyle = style
-            videoQueue.async { self.pipelineStyle = newStyle }
-        }
-    }
+    @Published var style: LookStyle = .film { didSet { syncPipeline() } }
     @Published private(set) var flash: FlashSetting = .off
     @Published private(set) var timer: TimerSetting = .off
     @Published var dualFormat = true
+    @Published var flatVideo = false { didSet { syncPipeline() } }
     @Published private(set) var maxResolution = false
+    @Published var guideOn = false { didSet { guideChanged() } }
+    @Published var autoPoseShot = false { didSet { analyzer.autoShot = autoPoseShot } }
     @Published private(set) var countdown = 0
     @Published var lastShot: CapturedShot?
     @Published var lastThumbnail: UIImage?
@@ -77,6 +126,8 @@ final class CameraService: NSObject, ObservableObject {
 
     let session = AVCaptureSession()
     let previewRenderer = PreviewRenderer.make()
+    let analyzer = SceneAnalyzer()
+    let level = LevelMonitor()
 
     // MARK: Interno
     private let sessionQueue = DispatchQueue(label: "toma.session")
@@ -87,12 +138,18 @@ final class CameraService: NSObject, ObservableObject {
     private var videoInput: AVCaptureDeviceInput?
     private var audioInput: AVCaptureDeviceInput?
     private var zoomBase: CGFloat = 1
+    private var maxZoomDisplay: CGFloat = 10
+    private var pinchStartZoom: CGFloat = 1
     private var inFlight: [Int64: PhotoProcessor] = [:]
     private var configured = false
+    private var editorOpen = false
+    private var styleBeforeG7X: LookStyle?
+    private var flashBeforeG7X: FlashSetting = .off
 
     // Estado del flujo de video (solo en videoQueue)
     private var pipelineStyle: LookStyle = .film
     private var pipelineFront = false
+    private var pipelineGuide = false
     private var frameCounter = 0
     private let recorder = DualRecorder()
     private let renderContext = CIContext(options: [.cacheIntermediates: false])
@@ -100,6 +157,29 @@ final class CameraService: NSObject, ObservableObject {
     private var countdownTimer: Timer?
     private var recordingTimer: Timer?
     private var toastWork: DispatchWorkItem?
+
+    override init() {
+        super.init()
+        analyzer.onStillShot = { [weak self] in self?.autoShoot() }
+    }
+
+    private var effectiveStyle: LookStyle {
+        (mode == .video && flatVideo) ? .plano : style
+    }
+
+    private func syncPipeline() {
+        let style = effectiveStyle
+        let guide = guideOn
+        videoQueue.async {
+            self.pipelineStyle = style
+            self.pipelineGuide = guide
+        }
+    }
+
+    private func guideChanged() {
+        if guideOn { level.start() } else { level.stop(); analyzer.reset() }
+        syncPipeline()
+    }
 
     // MARK: Arranque
 
@@ -120,12 +200,26 @@ final class CameraService: NSObject, ObservableObject {
 
     private func run() {
         let front = isFront, currentMode = mode, maxRes = maxResolution
+        syncPipeline()
         sessionQueue.async {
             if !self.configured {
                 self.configure(front: front, mode: currentMode, maxRes: maxRes)
                 self.configured = true
             }
             if !self.session.isRunning { self.session.startRunning() }
+        }
+    }
+
+    /// Mientras el editor está abierto se pausa la cámara para ahorrar batería.
+    func setEditorOpen(_ open: Bool) {
+        editorOpen = open
+        sessionQueue.async {
+            guard self.configured else { return }
+            if open {
+                if self.session.isRunning { self.session.stopRunning() }
+            } else if !self.session.isRunning {
+                self.session.startRunning()
+            }
         }
     }
 
@@ -158,7 +252,16 @@ final class CameraService: NSObject, ObservableObject {
             session.removeInput(current)
             videoInput = nil
         }
-        guard let device = front ? Self.frontCamera() : Self.backCamera(),
+        let chosen: AVCaptureDevice?
+        if front {
+            chosen = Self.frontCamera()
+        } else if mode == .raw {
+            // El RAW (Bayer) solo funciona con una cámara física, no con la virtual.
+            chosen = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+        } else {
+            chosen = Self.backCamera()
+        }
+        guard let device = chosen,
               let input = try? AVCaptureDeviceInput(device: device),
               session.canAddInput(input) else {
             session.commitConfiguration()
@@ -176,7 +279,7 @@ final class CameraService: NSObject, ObservableObject {
             session.addOutput(videoOutput)
         }
 
-        if mode == .photo {
+        if mode.isPhoto {
             if let mic = audioInput {
                 session.removeInput(mic)
                 audioInput = nil
@@ -229,21 +332,22 @@ final class CameraService: NSObject, ObservableObject {
         setupZoom(device: device, front: front)
         session.commitConfiguration()
 
-        // La resolución de foto se fija después de aplicar el formato de la sesión,
-        // para elegir entre las resoluciones que de verdad ofrece la cámara.
-        if mode == .photo, session.outputs.contains(photoOutput) {
+        // La resolución de foto se fija después de aplicar el formato de la sesión.
+        if mode.isPhoto, session.outputs.contains(photoOutput) {
             session.beginConfiguration()
-            configurePhotoOutput(device: device, maxRes: maxRes)
+            configurePhotoOutput(device: device, maxRes: maxRes, raw: mode == .raw)
             session.commitConfiguration()
         }
     }
 
-    private func configurePhotoOutput(device: AVCaptureDevice, maxRes: Bool) {
+    private func configurePhotoOutput(device: AVCaptureDevice, maxRes: Bool, raw: Bool) {
         let dims = device.activeFormat.supportedMaxPhotoDimensions.sorted {
             Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height)
         }
         let target: CMVideoDimensions?
-        if maxRes {
+        if raw {
+            target = dims.last(where: { Int($0.width) * Int($0.height) <= 13_000_000 }) ?? dims.first
+        } else if maxRes {
             target = dims.last
         } else {
             target = dims.last(where: { Int($0.width) * Int($0.height) <= 26_000_000 }) ?? dims.last
@@ -260,6 +364,7 @@ final class CameraService: NSObject, ObservableObject {
         zoomBase = base
         var stops: [CGFloat] = base > 1 ? [0.5, 1, 2] : (front ? [1] : [1, 2])
         stops = stops.filter { $0 * base <= device.maxAvailableVideoZoomFactor }
+        let maxDisplay = min(device.maxAvailableVideoZoomFactor / base, 10)
         do {
             try device.lockForConfiguration()
             device.videoZoomFactor = min(base, device.maxAvailableVideoZoomFactor)
@@ -268,6 +373,7 @@ final class CameraService: NSObject, ObservableObject {
         DispatchQueue.main.async {
             self.zoomStops = stops
             self.zoomDisplay = 1
+            self.maxZoomDisplay = maxDisplay
         }
     }
 
@@ -305,8 +411,25 @@ final class CameraService: NSObject, ObservableObject {
     // MARK: Controles
 
     func setMode(_ newMode: CaptureMode) {
-        guard newMode != mode, !isRecording else { return }
+        guard newMode != mode, !isRecording, countdown == 0 else { return }
+        let old = mode
         mode = newMode
+        UISelectionFeedbackGenerator().selectionChanged()
+
+        if newMode == .g7x {
+            styleBeforeG7X = style
+            flashBeforeG7X = flash
+            style = .g7x
+            flash = .on
+        } else if old == .g7x {
+            if let previous = styleBeforeG7X { style = previous }
+            flash = flashBeforeG7X
+        }
+        if newMode == .raw && isFront { isFront = false }
+        syncPipeline()
+
+        let needsReconfig = (old == .video) != (newMode == .video) || old == .raw || newMode == .raw
+        guard needsReconfig else { return }
         if newMode == .video, AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
             AVCaptureDevice.requestAccess(for: .audio) { _ in
                 DispatchQueue.main.async { self.reconfigure() }
@@ -316,8 +439,20 @@ final class CameraService: NSObject, ObservableObject {
         }
     }
 
+    func nextMode(_ step: Int) {
+        let all = CaptureMode.allCases
+        guard let index = all.firstIndex(of: mode) else { return }
+        let next = index + step
+        guard next >= 0, next < all.count else { return }
+        setMode(all[next])
+    }
+
     func flipCamera() {
         guard !isRecording else { return }
+        if mode == .raw {
+            toast("El RAW solo funciona con la cámara trasera")
+            return
+        }
         isFront.toggle()
         zoomDisplay = 1
         reconfigure()
@@ -337,6 +472,24 @@ final class CameraService: NSObject, ObservableObject {
         }
     }
 
+    func beginPinch() { pinchStartZoom = zoomDisplay }
+
+    func pinch(_ magnification: CGFloat) {
+        let minDisplay = zoomStops.first ?? 1
+        let display = min(max(pinchStartZoom * magnification, minDisplay), maxZoomDisplay)
+        zoomDisplay = display
+        sessionQueue.async {
+            guard let device = self.videoInput?.device else { return }
+            let factor = max(device.minAvailableVideoZoomFactor,
+                             min(display * self.zoomBase, device.maxAvailableVideoZoomFactor))
+            do {
+                try device.lockForConfiguration()
+                device.videoZoomFactor = factor
+                device.unlockForConfiguration()
+            } catch {}
+        }
+    }
+
     func cycleFlash() {
         let all = FlashSetting.allCases
         let index = all.firstIndex(of: flash) ?? 0
@@ -351,11 +504,12 @@ final class CameraService: NSObject, ObservableObject {
 
     func setMaxResolution(_ on: Bool) {
         maxResolution = on
+        let raw = mode == .raw
         sessionQueue.async {
             guard let device = self.videoInput?.device, self.session.outputs.contains(self.photoOutput) else { return }
             let failure = ExceptionCatcher.catchException {
                 self.session.beginConfiguration()
-                self.configurePhotoOutput(device: device, maxRes: on)
+                self.configurePhotoOutput(device: device, maxRes: on, raw: raw)
                 self.session.commitConfiguration()
             }
             if let failure {
@@ -366,16 +520,12 @@ final class CameraService: NSObject, ObservableObject {
         toast(on ? "Fotos a máxima resolución (48 MP)" : "Fotos a 24 MP")
     }
 
-    func openPhotos() {
-        if let url = URL(string: "photos-redirect://") { UIApplication.shared.open(url) }
-    }
-
     func toast(_ text: String) {
         toastText = text
         toastWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.toastText = nil }
         toastWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: work)
     }
 
     // MARK: Disparo
@@ -391,6 +541,12 @@ final class CameraService: NSObject, ObservableObject {
         } else {
             runCountdown(timer.rawValue)
         }
+    }
+
+    private func autoShoot() {
+        guard mode.isPhoto, !isRecording, countdown == 0, !editorOpen, lastShot == nil else { return }
+        toast("Disparo automático")
+        capturePhoto()
     }
 
     private func runCountdown(_ seconds: Int) {
@@ -413,34 +569,38 @@ final class CameraService: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { self.shutterBlink = false }
         let flashMode = flash.avMode
         let front = isFront
+        let wantsRaw = mode == .raw
         sessionQueue.async {
             guard self.session.outputs.contains(self.photoOutput) else { return }
-            let settings: AVCapturePhotoSettings
-            if self.photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
-            } else {
-                settings = AVCapturePhotoSettings()
+            let output = self.photoOutput
+            let processedFormat: [String: Any] = output.availablePhotoCodecTypes.contains(.hevc)
+                ? [AVVideoCodecKey: AVVideoCodecType.hevc]
+                : [AVVideoCodecKey: AVVideoCodecType.jpeg]
+
+            var settings = AVCapturePhotoSettings(format: processedFormat)
+            var isRaw = false
+            if wantsRaw,
+               let rawType = output.availableRawPhotoPixelFormatTypes.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
+                settings = AVCapturePhotoSettings(rawPixelFormatType: rawType, processedFormat: processedFormat)
+                isRaw = true
+            } else if wantsRaw {
+                self.report("Este modo de cámara no ofrece RAW; se toma foto normal")
             }
-            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
-            settings.photoQualityPrioritization = .quality
-            if self.photoOutput.supportedFlashModes.contains(flashMode) {
+            settings.maxPhotoDimensions = output.maxPhotoDimensions
+            settings.photoQualityPrioritization = isRaw ? .speed : .quality
+            if output.supportedFlashModes.contains(flashMode) {
                 settings.flashMode = flashMode
             }
+
             let id = settings.uniqueID
             let processor = PhotoProcessor(front: front) { [weak self] shot in
                 guard let self else { return }
                 self.sessionQueue.async { self.inFlight[id] = nil }
-                DispatchQueue.main.async {
-                    if let shot {
-                        self.lastShot = shot
-                    } else {
-                        self.toast("No se pudo tomar la foto")
-                    }
-                }
+                DispatchQueue.main.async { self.handleCaptured(shot) }
             }
             self.inFlight[id] = processor
             let failure = ExceptionCatcher.catchException {
-                self.photoOutput.capturePhoto(with: settings, delegate: processor)
+                output.capturePhoto(with: settings, delegate: processor)
             }
             if let failure {
                 self.inFlight[id] = nil
@@ -449,10 +609,24 @@ final class CameraService: NSObject, ObservableObject {
         }
     }
 
+    private func handleCaptured(_ result: PhotoProcessor.Result?) {
+        guard let result else {
+            toast("No se pudo tomar la foto")
+            return
+        }
+        if let raw = result.rawData, let processed = result.processedData {
+            PhotoSaver.saveRawPair(processed: processed, raw: raw) { ok in
+                self.toast(ok ? "RAW guardado en Fotos" : "No se pudo guardar el RAW")
+            }
+        }
+        lastShot = result.shot
+    }
+
     // MARK: Grabación
 
     private func startRecording() {
         let kinds: [DualRecorder.Kind] = dualFormat ? [.vertical, .horizontal] : [.vertical]
+        let bitrate = flatVideo ? 26_000_000 : 16_000_000
         sessionQueue.async {
             var audioSettings: [String: Any]?
             if self.session.outputs.contains(self.audioOutput) {
@@ -461,7 +635,7 @@ final class CameraService: NSObject, ObservableObject {
             self.videoQueue.async {
                 var prepared = false
                 let failure = ExceptionCatcher.catchException {
-                    prepared = (try? self.recorder.prepare(kinds: kinds, audioSettings: audioSettings)) != nil
+                    prepared = (try? self.recorder.prepare(kinds: kinds, audioSettings: audioSettings, bitrate: bitrate)) != nil
                 }
                 if prepared, failure == nil {
                     DispatchQueue.main.async { self.didBeginRecording() }
@@ -511,6 +685,10 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         frameCounter &+= 1
 
+        if pipelineGuide {
+            analyzer.submit(pixelBuffer, front: pipelineFront)
+        }
+
         // El sensor entrega cuadros horizontales; los giramos a vertical.
         var frame = CIImage(cvPixelBuffer: pixelBuffer).oriented(pipelineFront ? .leftMirrored : .right)
         frame = frame.transformed(by: CGAffineTransform(translationX: -frame.extent.minX, y: -frame.extent.minY))
@@ -537,36 +715,55 @@ extension CameraService: AVCaptureVideoDataOutputSampleBufferDelegate, AVCapture
 
 // MARK: - Procesador de foto
 
+/// Junta la foto procesada y, si hay, el RAW; avisa cuando termina la captura completa.
 final class PhotoProcessor: NSObject, AVCapturePhotoCaptureDelegate {
+    struct Result {
+        let shot: CapturedShot
+        let processedData: Data?
+        let rawData: Data?
+    }
+
     private let front: Bool
-    private let completion: (CapturedShot?) -> Void
+    private let completion: (Result?) -> Void
+    private var processedData: Data?
+    private var rawData: Data?
+    private var metadata: [String: Any] = [:]
     private var finished = false
 
-    init(front: Bool, completion: @escaping (CapturedShot?) -> Void) {
+    init(front: Bool, completion: @escaping (Result?) -> Void) {
         self.front = front
         self.completion = completion
     }
 
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        guard error == nil, let data = photo.fileDataRepresentation() else { return }
+        if photo.isRawPhoto {
+            rawData = data
+            if metadata.isEmpty { metadata = photo.metadata }
+        } else {
+            processedData = data
+            metadata = photo.metadata
+        }
+    }
+
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings, error: Error?) {
         guard !finished else { return }
         finished = true
-        guard error == nil,
-              let data = photo.fileDataRepresentation(),
-              let raw = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
+
+        var image: CIImage?
+        if let processedData {
+            image = CIImage(data: processedData, options: [.applyOrientationProperty: true])
+        }
+        if image == nil, let rawData, let filter = CIRAWFilter(imageData: rawData, identifierHint: nil) {
+            image = filter.outputImage
+        }
+        guard let image else {
             completion(nil)
             return
         }
-        let image = raw.transformed(by: CGAffineTransform(translationX: -raw.extent.minX, y: -raw.extent.minY))
-
-        var info = ShotInfo()
-        info.isFront = front
-        if let exif = photo.metadata[kCGImagePropertyExifDictionary as String] as? [String: Any] {
-            info.iso = (exif[kCGImagePropertyExifISOSpeedRatings as String] as? [NSNumber])?.first?.intValue
-            info.exposure = (exif[kCGImagePropertyExifExposureTime as String] as? NSNumber)?.doubleValue
-            info.aperture = (exif[kCGImagePropertyExifFNumber as String] as? NSNumber)?.doubleValue
-            info.focal35 = (exif[kCGImagePropertyExifFocalLenIn35mmFilm as String] as? NSNumber)?.intValue
-            info.lens = exif[kCGImagePropertyExifLensModel as String] as? String
-        }
-        completion(CapturedShot(image: image, info: info))
+        let normalized = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
+        let info = ShotInfo(metadata: metadata, front: front)
+        let shot = CapturedShot(image: normalized, info: info, raw: rawData)
+        completion(Result(shot: shot, processedData: processedData, rawData: rawData))
     }
 }

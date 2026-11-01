@@ -34,7 +34,11 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E "error:|\*\* BUILD" || true
-          grep -q "BUILD SUCCEEDED" build.log
+          if ! grep -q "BUILD SUCCEEDED" build.log; then
+            errors=$(grep -E "error:" build.log | sed -E 's#^.*/Toma/##' | sort -u | head -60 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Errores de compilacion::${errors}"
+            exit 1
+          fi
 
       - name: Empaquetar IPA
         run: |

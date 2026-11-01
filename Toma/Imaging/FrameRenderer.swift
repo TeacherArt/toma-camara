@@ -1,9 +1,9 @@
 import UIKit
 
 /// Marcos para presentar la foto (inspirados en las referencias: White/Paper/Specs/Date,
-/// Polaroid, ticket impreso y estampilla).
+/// Polaroid, ticket impreso y estampilla con o sin borde).
 enum FrameStyle: String, CaseIterable, Identifiable {
-    case none, white, paper, specs, date, polaroid, ticket, stamp
+    case none, white, paper, specs, date, polaroid, ticket, stamp, stampEdge
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum FrameStyle: String, CaseIterable, Identifiable {
         case .polaroid: return "Polaroid"
         case .ticket: return "Ticket"
         case .stamp: return "Sello"
+        case .stampEdge: return "Sello sin borde"
         }
     }
 
@@ -30,14 +31,21 @@ enum FrameStyle: String, CaseIterable, Identifiable {
         case .polaroid: return "photo"
         case .ticket: return "doc.text"
         case .stamp: return "seal"
+        case .stampEdge: return "seal.fill"
         }
     }
 
-    /// Ticket y sello tienen bordes recortados: se guardan como PNG con transparencia.
-    var isTransparent: Bool { self == .ticket || self == .stamp }
+    /// Ticket y sellos tienen bordes recortados: se guardan como PNG con transparencia.
+    var isTransparent: Bool { self == .ticket || self == .stamp || self == .stampEdge }
 
-    /// Ticket y sello no necesitan 24 MP; se reducen para que el PNG pese poco.
+    /// Ticket y sellos no necesitan 24 MP; se reducen para que el PNG pese poco.
     var sizeLimit: CGFloat? { isTransparent ? 2000 : nil }
+}
+
+/// Imagen con marco y el lugar exacto donde quedó la foto dentro de ella.
+struct FramedImage {
+    let image: UIImage
+    let photoRect: CGRect
 }
 
 enum FrameRenderer {
@@ -47,13 +55,13 @@ enum FrameRenderer {
     private static let softInk = UIColor(red: 0.45, green: 0.45, blue: 0.47, alpha: 1)
     private static let dateOrange = UIColor(red: 1.0, green: 0.48, blue: 0.1, alpha: 1)
 
-    static func render(photo cgImage: CGImage, frame: FrameStyle, info: ShotInfo, styleName: String) -> UIImage {
+    static func render(photo cgImage: CGImage, frame: FrameStyle, info: ShotInfo, styleName: String) -> FramedImage {
         let photo = UIImage(cgImage: cgImage)
         let w = CGFloat(cgImage.width)
         let h = CGFloat(cgImage.height)
         switch frame {
         case .none:
-            return photo
+            return FramedImage(image: photo, photoRect: CGRect(x: 0, y: 0, width: w, height: h))
         case .white:
             return bordered(photo, w: w, h: h, pad: min(w, h) * 0.035, color: .white)
         case .paper:
@@ -69,25 +77,30 @@ enum FrameRenderer {
             return ticket(photo, w: w, h: h, info: info, styleName: styleName)
         case .stamp:
             return stamp(photo, w: w, h: h, info: info)
+        case .stampEdge:
+            return stampEdge(photo, w: w, h: h, info: info)
         }
     }
 
     // MARK: Marcos
 
-    private static func bordered(_ photo: UIImage, w: CGFloat, h: CGFloat, pad: CGFloat, color: UIColor) -> UIImage {
+    private static func bordered(_ photo: UIImage, w: CGFloat, h: CGFloat, pad: CGFloat, color: UIColor) -> FramedImage {
         let size = CGSize(width: w + 2 * pad, height: h + 2 * pad)
-        return renderer(size, opaque: true).image { ctx in
+        let rect = CGRect(x: pad, y: pad, width: w, height: h)
+        let image = renderer(size, opaque: true).image { ctx in
             color.setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
-            photo.draw(in: CGRect(x: pad, y: pad, width: w, height: h))
+            photo.draw(in: rect)
         }
+        return FramedImage(image: image, photoRect: rect)
     }
 
-    private static func specs(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo, styleName: String) -> UIImage {
+    private static func specs(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo, styleName: String) -> FramedImage {
         let u = min(w, h)
         let side = u * 0.035
         let bottom = u * 0.17
         let size = CGSize(width: w + 2 * side, height: h + side + bottom)
+        let rect = CGRect(x: side, y: side, width: w, height: h)
         let big = UIFont.monospacedSystemFont(ofSize: bottom * 0.2, weight: .semibold)
         let small = UIFont.monospacedSystemFont(ofSize: bottom * 0.14, weight: .regular)
         let exif = [
@@ -97,52 +110,57 @@ enum FrameRenderer {
             info.iso.map { "ISO\($0)" }
         ].compactMap { $0 }.joined(separator: "  ")
 
-        return renderer(size, opaque: true).image { ctx in
+        let image = renderer(size, opaque: true).image { ctx in
             UIColor.white.setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
-            photo.draw(in: CGRect(x: side, y: side, width: w, height: h))
+            photo.draw(in: rect)
             let top = h + side
-            drawText("TOMA · iPhone", font: big, color: ink, x: side, y: top + bottom * 0.22, anchor: .left)
+            drawText("ARTHUR · TOMA", font: big, color: ink, x: side, y: top + bottom * 0.22, anchor: .left)
             drawText(dateText(info.date, "dd.MM.yyyy  HH:mm"), font: small, color: softInk,
                      x: side, y: top + bottom * 0.56, anchor: .left)
             drawText(exif, font: big, color: ink, x: size.width - side, y: top + bottom * 0.22, anchor: .right)
             drawText(styleName, font: small, color: softInk, x: size.width - side, y: top + bottom * 0.56, anchor: .right)
         }
+        return FramedImage(image: image, photoRect: rect)
     }
 
-    private static func dateStamp(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> UIImage {
+    private static func dateStamp(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> FramedImage {
         let u = min(w, h)
         let font = UIFont.monospacedDigitSystemFont(ofSize: u * 0.05, weight: .bold)
         let glow = NSShadow()
         glow.shadowColor = dateOrange.withAlphaComponent(0.9)
         glow.shadowBlurRadius = u * 0.012
         glow.shadowOffset = .zero
-        return renderer(CGSize(width: w, height: h), opaque: true).image { _ in
-            photo.draw(in: CGRect(x: 0, y: 0, width: w, height: h))
+        let rect = CGRect(x: 0, y: 0, width: w, height: h)
+        let image = renderer(CGSize(width: w, height: h), opaque: true).image { _ in
+            photo.draw(in: rect)
             drawText(dateText(info.date, "''yy MM dd"), font: font, color: dateOrange,
                      x: w - u * 0.06, y: h - u * 0.06 - font.lineHeight, anchor: .right,
                      kern: u * 0.004, shadow: glow)
         }
+        return FramedImage(image: image, photoRect: rect)
     }
 
-    private static func polaroid(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> UIImage {
+    private static func polaroid(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> FramedImage {
         let u = min(w, h)
         let side = u * 0.055
         let bottom = u * 0.24
         let size = CGSize(width: w + 2 * side, height: h + side + bottom)
+        let rect = CGRect(x: side, y: side, width: w, height: h)
         let font = UIFont(name: "Noteworthy-Light", size: bottom * 0.2)
             ?? UIFont.italicSystemFont(ofSize: bottom * 0.2)
-        return renderer(size, opaque: true).image { ctx in
+        let image = renderer(size, opaque: true).image { ctx in
             UIColor(red: 0.98, green: 0.98, blue: 0.965, alpha: 1).setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
-            photo.draw(in: CGRect(x: side, y: side, width: w, height: h))
+            photo.draw(in: rect)
             drawText(dateText(info.date, "d 'de' MMMM, yyyy"), font: font,
                      color: UIColor(red: 0.2, green: 0.2, blue: 0.26, alpha: 1),
                      x: size.width / 2, y: side + h + bottom * 0.32, anchor: .center)
         }
+        return FramedImage(image: image, photoRect: rect)
     }
 
-    private static func ticket(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo, styleName: String) -> UIImage {
+    private static func ticket(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo, styleName: String) -> FramedImage {
         let m = w * 0.09
         let width = w + 2 * m
         let paper = UIColor(red: 0.965, green: 0.955, blue: 0.93, alpha: 1)
@@ -174,8 +192,9 @@ enum FrameRenderer {
         let thanksY = y; y += subFont.lineHeight + m
         let height = y + teeth
         let size = CGSize(width: width, height: height)
+        let rect = CGRect(x: m, y: photoY, width: w, height: h)
 
-        return renderer(size, opaque: false).image { ctx in
+        let image = renderer(size, opaque: false).image { ctx in
             let cg = ctx.cgContext
 
             // Papel con borde inferior dentado
@@ -194,10 +213,10 @@ enum FrameRenderer {
             paper.setFill()
             path.fill()
 
-            drawText("TOMA RECEIPT", font: titleFont, color: ink, x: width / 2, y: titleY, anchor: .center, kern: w * 0.008)
+            drawText("ARTHUR RECEIPT", font: titleFont, color: ink, x: width / 2, y: titleY, anchor: .center, kern: w * 0.008)
             drawText(dateText(info.date, "EEEE d MMM yyyy").uppercased(), font: subFont, color: softInk,
                      x: width / 2, y: subY, anchor: .center)
-            photo.draw(in: CGRect(x: m, y: photoY, width: w, height: h))
+            photo.draw(in: rect)
             dashedLine(cg, y: dash1, from: m, to: width - m, color: ink, lineWidth: w * 0.004)
 
             for (i, row) in rows.enumerated() {
@@ -216,49 +235,76 @@ enum FrameRenderer {
                     seed: UInt64(max(0, info.date.timeIntervalSince1970)), color: ink)
             drawText("#### \(dateText(info.date, "MMdd")) ####", font: subFont, color: ink,
                      x: width / 2, y: codeY, anchor: .center, kern: w * 0.006)
-            drawText("GRACIAS POR TU VISITA", font: subFont, color: softInk,
+            drawText("GRATEFUL & BLESSED", font: subFont, color: softInk,
                      x: width / 2, y: thanksY, anchor: .center, kern: w * 0.004)
         }
+        return FramedImage(image: image, photoRect: rect)
     }
 
-    private static func stamp(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> UIImage {
+    /// Estampilla: papel blanco con perforaciones alrededor de la foto.
+    private static func stamp(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> FramedImage {
         let u = min(w, h)
         let r = u * 0.022
         let border = r * 2.4
         let gap = r * 2.7
         let size = CGSize(width: w + 2 * border, height: h + 2 * border)
+        let rect = CGRect(x: border, y: border, width: w, height: h)
+
+        let image = renderer(size, opaque: false).image { _ in
+            let path = perforatedPath(size: size, radius: r, gap: gap)
+            UIColor(white: 0.985, alpha: 1).setFill()
+            path.fill()
+            photo.draw(in: rect)
+            drawDayNumber(info: info, in: rect, unit: u)
+        }
+        return FramedImage(image: image, photoRect: rect)
+    }
+
+    /// Estampilla sin borde: la propia foto lleva el corte perforado.
+    private static func stampEdge(_ photo: UIImage, w: CGFloat, h: CGFloat, info: ShotInfo) -> FramedImage {
+        let u = min(w, h)
+        let r = u * 0.022
+        let gap = r * 2.7
+        let size = CGSize(width: w, height: h)
+        let rect = CGRect(origin: .zero, size: size)
+
+        let image = renderer(size, opaque: false).image { _ in
+            perforatedPath(size: size, radius: r, gap: gap).addClip()
+            photo.draw(in: rect)
+            drawDayNumber(info: info, in: rect.insetBy(dx: r * 1.5, dy: r * 1.5), unit: u)
+        }
+        return FramedImage(image: image, photoRect: rect)
+    }
+
+    private static func perforatedPath(size: CGSize, radius r: CGFloat, gap: CGFloat) -> UIBezierPath {
+        let path = UIBezierPath(rect: CGRect(origin: .zero, size: size))
+        let nx = max(2, Int(size.width / gap))
+        let ny = max(2, Int(size.height / gap))
+        let sx = size.width / CGFloat(nx)
+        let sy = size.height / CGFloat(ny)
+        for i in 0...nx {
+            let x = CGFloat(i) * sx
+            path.append(circle(x, 0, r))
+            path.append(circle(x, size.height, r))
+        }
+        for j in 1..<ny {
+            let y = CGFloat(j) * sy
+            path.append(circle(0, y, r))
+            path.append(circle(size.width, y, r))
+        }
+        path.usesEvenOddFillRule = true
+        return path
+    }
+
+    private static func drawDayNumber(info: ShotInfo, in rect: CGRect, unit u: CGFloat) {
         let numberFont = UIFont.monospacedDigitSystemFont(ofSize: u * 0.06, weight: .bold)
         let shade = NSShadow()
         shade.shadowColor = UIColor.black.withAlphaComponent(0.35)
         shade.shadowBlurRadius = u * 0.01
         shade.shadowOffset = .zero
-
-        return renderer(size, opaque: false).image { _ in
-            // Papel con perforaciones: los círculos en el borde quedan como huecos.
-            let path = UIBezierPath(rect: CGRect(origin: .zero, size: size))
-            let nx = max(2, Int(size.width / gap))
-            let ny = max(2, Int(size.height / gap))
-            let sx = size.width / CGFloat(nx)
-            let sy = size.height / CGFloat(ny)
-            for i in 0...nx {
-                let x = CGFloat(i) * sx
-                path.append(circle(x, 0, r))
-                path.append(circle(x, size.height, r))
-            }
-            for j in 1..<ny {
-                let y = CGFloat(j) * sy
-                path.append(circle(0, y, r))
-                path.append(circle(size.width, y, r))
-            }
-            path.usesEvenOddFillRule = true
-            UIColor(white: 0.985, alpha: 1).setFill()
-            path.fill()
-
-            photo.draw(in: CGRect(x: border, y: border, width: w, height: h))
-            drawText(dateText(info.date, "dd"), font: numberFont, color: .white,
-                     x: border + w - u * 0.04, y: border + h - u * 0.04 - numberFont.lineHeight,
-                     anchor: .right, shadow: shade)
-        }
+        drawText(dateText(info.date, "dd"), font: numberFont, color: .white,
+                 x: rect.maxX - u * 0.04, y: rect.maxY - u * 0.04 - numberFont.lineHeight,
+                 anchor: .right, shadow: shade)
     }
 
     // MARK: Ayudantes de dibujo
@@ -335,20 +381,20 @@ enum FrameRenderer {
 
     // MARK: Textos
 
-    private static func dateText(_ date: Date, _ format: String) -> String {
+    static func dateText(_ date: Date, _ format: String) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "es_MX")
         formatter.dateFormat = format
         return formatter.string(from: date)
     }
 
-    private static func shutterText(_ seconds: Double?) -> String? {
+    static func shutterText(_ seconds: Double?) -> String? {
         guard let seconds, seconds > 0 else { return nil }
         if seconds >= 1 { return String(format: "%.1fs", seconds) }
         return "1/\(Int((1 / seconds).rounded()))s"
     }
 
-    private static func apertureText(_ value: Double?) -> String? {
+    static func apertureText(_ value: Double?) -> String? {
         guard let value else { return nil }
         return String(format: "ƒ%.1f", value)
     }

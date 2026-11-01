@@ -27,6 +27,19 @@ enum PhotoSaver {
         }
     }
 
+    /// Guarda la foto procesada con su RAW (DNG) como una sola foto en la fototeca.
+    static func saveRawPair(processed: Data, raw: Data, completion: @escaping (Bool) -> Void) {
+        let finish: (Bool) -> Void = { ok in DispatchQueue.main.async { completion(ok) } }
+        withAccess { ok in
+            guard ok else { finish(false); return }
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: processed, options: nil)
+                request.addResource(with: .alternatePhoto, data: raw, options: nil)
+            }, completionHandler: { success, _ in finish(success) })
+        }
+    }
+
     static func saveVideos(_ urls: [URL], completion: @escaping (Bool) -> Void) {
         let finish: (Bool) -> Void = { ok in DispatchQueue.main.async { completion(ok) } }
         guard !urls.isEmpty else { finish(false); return }

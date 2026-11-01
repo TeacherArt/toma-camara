@@ -44,6 +44,7 @@ targets:
         NSCameraUsageDescription: Toma usa la cámara para tomar tus fotos y videos.
         NSMicrophoneUsageDescription: Toma usa el micrófono para grabar el audio de tus videos.
         NSPhotoLibraryAddUsageDescription: Toma guarda tus fotos y videos en tu fototeca.
+        NSLocationWhenInUseUsageDescription: Toma usa tu ubicación solo cuando agregas el texto o la marca con el lugar.
 schemes:
   Toma:
     build:

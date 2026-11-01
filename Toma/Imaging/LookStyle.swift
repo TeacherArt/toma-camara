@@ -1,9 +1,10 @@
 import CoreGraphics
 import CoreImage
+import Foundation
 
 /// Estilos de color. Se aplican en vivo en la vista previa, al grabar y al revelar la foto.
 enum LookStyle: String, CaseIterable, Identifiable {
-    case natural, film, g7x, glow, dusk, harbor, noche, relic, mono
+    case natural, film, g7x, glow, dusk, harbor, noche, relic, mono, plano
 
     var id: String { rawValue }
 
@@ -18,6 +19,7 @@ enum LookStyle: String, CaseIterable, Identifiable {
         case .noche: return "NOCHE"
         case .relic: return "RELIC"
         case .mono: return "B/N"
+        case .plano: return "PLANO"
         }
     }
 
@@ -44,14 +46,15 @@ enum LookStyle: String, CaseIterable, Identifiable {
                 .grain(0.07, unit: unit, offset: grainOffset)
 
         case .g7x:
-            // Compacta Canon: cálida, piel suave, brillo ligero en altas luces.
+            // Compacta Canon con flash: cielos azul profundo, piel cálida, mucho contraste y nitidez.
             img = img
-                .warm(450)
-                .channelScale(r: 1.02, g: 0.985, b: 1.0)
-                .shadowsHighlights(shadows: 0.2, highlights: 0.9)
-                .colorControls(saturation: 1.08, brightness: 0.015, contrast: 1.0)
-                .curve([(0, 0.02), (0.25, 0.255), (0.5, 0.52), (0.75, 0.78), (1, 0.98)])
-                .bloom(0.18, unit: unit)
+                .warm(250)
+                .colorCube(ColorLUT.g7x)
+                .vibrance(0.18)
+                .curve([(0, 0.0), (0.18, 0.15), (0.5, 0.53), (0.82, 0.88), (1, 1)])
+                .sharpenLuminance(0.45)
+                .bloom(0.1, unit: unit)
+                .vignette(0.3)
 
         case .glow:
             // Retrato y selfie: luz suave y piel luminosa.
@@ -103,14 +106,132 @@ enum LookStyle: String, CaseIterable, Identifiable {
                 .colorControls(saturation: 0, contrast: 1.15)
                 .curve([(0, 0.02), (0.25, 0.22), (0.5, 0.5), (0.75, 0.8), (1, 0.98)])
                 .grain(0.06, unit: unit, offset: grainOffset)
+
+        case .plano:
+            // Video plano: sombras levantadas y luces suaves para editar después.
+            img = img
+                .curve([(0, 0.07), (0.25, 0.29), (0.5, 0.5), (0.75, 0.71), (1, 0.93)])
+                .colorControls(saturation: 0.86)
         }
         return img.cropped(to: extent)
+    }
+}
+
+// MARK: - Tabla de color (LUT)
+
+/// Tabla 3D que cambia colores por tono: así se imita la "ciencia de color" de una cámara.
+struct ColorLUT {
+    let dimension: Int
+    let data: Data
+
+    /// Canon compacta: azules y cian más profundos, piel y rojos cálidos, verdes contenidos.
+    static let g7x = ColorLUT.make(dimension: 33, transform: ColorLUT.g7xTransform)
+
+    static func make(dimension n: Int, transform: (Float, Float, Float) -> (Float, Float, Float)) -> ColorLUT {
+        var cube = [Float](repeating: 0, count: n * n * n * 4)
+        var i = 0
+        let step = Float(n - 1)
+        for bi in 0..<n {
+            for gi in 0..<n {
+                for ri in 0..<n {
+                    let out = transform(Float(ri) / step, Float(gi) / step, Float(bi) / step)
+                    cube[i] = out.0
+                    cube[i + 1] = out.1
+                    cube[i + 2] = out.2
+                    cube[i + 3] = 1
+                    i += 4
+                }
+            }
+        }
+        let data = cube.withUnsafeBufferPointer { Data(buffer: $0) }
+        return ColorLUT(dimension: n, data: data)
+    }
+
+    static func g7xTransform(_ r: Float, _ g: Float, _ b: Float) -> (Float, Float, Float) {
+        let hsv = rgbToHsv(r, g, b)
+        let hue = hsv.0
+        var s = hsv.1
+        var v = hsv.2
+
+        func band(_ center: Float, _ width: Float) -> Float {
+            var d = abs(hue - center)
+            if d > 180 { d = 360 - d }
+            return max(0, 1 - d / width)
+        }
+        let blue = band(218, 38)
+        let cyan = band(188, 22)
+        let skin = band(24, 22)
+        let red = band(358, 18)
+        let green = band(110, 45)
+
+        let originalSat = s
+        s *= 1 + 0.30 * blue + 0.16 * cyan + 0.08 * skin + 0.06 * red - 0.10 * green
+        v *= 1 - 0.12 * blue * originalSat
+        var h = hue + 5 * band(8, 16) - 7 * green
+        if h < 0 { h += 360 }
+        if h >= 360 { h -= 360 }
+        s = min(max(s, 0), 1)
+        v = min(max(v, 0), 1)
+        return hsvToRgb(h, s, v)
+    }
+
+    static func rgbToHsv(_ r: Float, _ g: Float, _ b: Float) -> (Float, Float, Float) {
+        let maxV = max(r, max(g, b))
+        let minV = min(r, min(g, b))
+        let d = maxV - minV
+        var h: Float = 0
+        if d > 1e-6 {
+            if maxV == r {
+                h = 60 * fmodf((g - b) / d, 6)
+            } else if maxV == g {
+                h = 60 * ((b - r) / d + 2)
+            } else {
+                h = 60 * ((r - g) / d + 4)
+            }
+        }
+        if h < 0 { h += 360 }
+        let s: Float = maxV <= 1e-6 ? 0 : d / maxV
+        return (h, s, maxV)
+    }
+
+    static func hsvToRgb(_ h: Float, _ s: Float, _ v: Float) -> (Float, Float, Float) {
+        let c = v * s
+        let hp = fmodf(h / 60, 6)
+        let x = c * (1 - abs(fmodf(hp, 2) - 1))
+        var rgb: (Float, Float, Float)
+        if hp < 1 {
+            rgb = (c, x, 0)
+        } else if hp < 2 {
+            rgb = (x, c, 0)
+        } else if hp < 3 {
+            rgb = (0, c, x)
+        } else if hp < 4 {
+            rgb = (0, x, c)
+        } else if hp < 5 {
+            rgb = (x, 0, c)
+        } else {
+            rgb = (c, 0, x)
+        }
+        let m = v - c
+        return (rgb.0 + m, rgb.1 + m, rgb.2 + m)
     }
 }
 
 // MARK: - Bloques de color
 
 extension CIImage {
+    func colorCube(_ lut: ColorLUT) -> CIImage {
+        applyingFilter("CIColorCubeWithColorSpace", parameters: [
+            "inputCubeDimension": lut.dimension,
+            "inputCubeData": lut.data,
+            "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB) as Any
+        ])
+    }
+
+    func sharpenLuminance(_ amount: CGFloat) -> CIImage {
+        applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: amount])
+    }
+
     /// Positivo = más cálido, negativo = más frío.
     func warm(_ amount: CGFloat) -> CIImage {
         applyingFilter("CITemperatureAndTint", parameters: [

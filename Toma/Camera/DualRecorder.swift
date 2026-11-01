@@ -31,7 +31,7 @@ final class DualRecorder {
     private(set) var isActive = false
     private let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
 
-    func prepare(kinds: [Kind], audioSettings: [String: Any]?) throws {
+    func prepare(kinds: [Kind], audioSettings: [String: Any]?, bitrate: Int = 16_000_000) throws {
         tracks = []
         started = false
         for kind in kinds {
@@ -43,7 +43,7 @@ final class DualRecorder {
                 AVVideoCodecKey: AVVideoCodecType.hevc,
                 AVVideoWidthKey: Int(kind.size.width),
                 AVVideoHeightKey: Int(kind.size.height),
-                AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 16_000_000]
+                AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: bitrate]
             ]
             let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
             videoIn.expectsMediaDataInRealTime = true
