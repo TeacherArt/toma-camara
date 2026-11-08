@@ -312,8 +312,8 @@ final class EditorModel: ObservableObject {
         let framed = FrameRenderer.render(photo: cg, frame: frame, info: info, styleName: style.title)
         // Los stickers van sobre toda la imagen (también sobre el marco), en cualquier lugar.
         guard let overlays, !overlays.isEmpty else { return framed }
-        let image = OverlayRenderer.composite(overlays, onto: framed.image, opaque: !frame.isTransparent)
-        return FramedImage(image: image, photoRect: framed.photoRect)
+        let composed = OverlayRenderer.composite(overlays, onto: framed.image, opaque: !frame.isTransparent)
+        return FramedImage(image: composed, photoRect: framed.photoRect)
     }
 
     private func makeThumbs() {

@@ -9,6 +9,8 @@ struct CameraScreen: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var showPoses = false
     @State private var activePose: PoseIdea?
+    @State private var showGhost = true
+    @State private var mirrorGhost = false
     @State private var loadingPick = false
     @State private var pinching = false
 
@@ -155,6 +157,10 @@ struct CameraScreen: View {
 
             if cam.dualFormat && cam.mode != .raw && !cam.guideOn { DualGuides() }
 
+            if let pose = activePose, showGhost, let ghost = pose.image {
+                PoseGhost(image: ghost, mirrored: mirrorGhost)
+            }
+
             if cam.guideOn {
                 GuideOverlay(analyzer: cam.analyzer, level: cam.level)
             }
@@ -168,7 +174,12 @@ struct CameraScreen: View {
 
             VStack {
                 if let pose = activePose {
-                    ActivePoseChip(pose: pose) { activePose = nil }
+                    ActivePoseChip(pose: pose,
+                                   ghostOn: showGhost,
+                                   hasGhost: pose.image != nil,
+                                   onToggleGhost: { showGhost.toggle() },
+                                   onMirror: { mirrorGhost.toggle() },
+                                   onClose: { activePose = nil })
                         .padding(.top, cam.guideOn ? 92 : 10)
                 }
                 if cam.isRecording {

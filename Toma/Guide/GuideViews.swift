@@ -133,9 +133,14 @@ private struct StillRing: View {
     }
 }
 
-/// Indicación de la pose elegida, arriba de la vista previa.
+
+/// Indicación de la pose elegida, arriba de la vista previa, con botones para la silueta guía.
 struct ActivePoseChip: View {
     let pose: PoseIdea
+    let ghostOn: Bool
+    let hasGhost: Bool
+    let onToggleGhost: () -> Void
+    let onMirror: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -148,6 +153,15 @@ struct ActivePoseChip: View {
                 Text(pose.detail).font(.system(size: 11, design: .rounded)).opacity(0.85)
             }
             Spacer(minLength: 0)
+            if hasGhost {
+                Button(action: onToggleGhost) {
+                    Image(systemName: ghostOn ? "eye.fill" : "eye.slash").font(.system(size: 13, weight: .bold))
+                }
+                Button(action: onMirror) {
+                    Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                        .font(.system(size: 13, weight: .bold))
+                }
+            }
             Button(action: onClose) {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .bold))
             }
@@ -159,14 +173,32 @@ struct ActivePoseChip: View {
     }
 }
 
-/// Coach de poses: sugiere según cuántas personas hay y qué quieres mostrar.
+/// Silueta de la pose encima de la vista previa para imitarla (como "guide" en las apps de poses).
+struct PoseGhost: View {
+    let image: UIImage
+    let mirrored: Bool
+
+    var body: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(x: mirrored ? -1 : 1, y: 1)
+            .opacity(0.42)
+            .padding(.top, 70)
+            .padding(.bottom, 120)
+            .allowsHitTesting(false)
+    }
+}
+
+/// Catálogo de poses: por personas, categoría (tendencia, de pie, 3/4, sentado, espejo, close-up) y búsqueda.
 struct PosePanel: View {
     let detectedPeople: Int
     @Binding var selected: PoseIdea?
     @Binding var autoShot: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var group: PeopleGroup
-    @State private var focus: PoseFocus = .outfit
+    @State private var category: PoseCategory = .tendencia
+    @State private var search = ""
 
     init(detectedPeople: Int, selected: Binding<PoseIdea?>, autoShot: Binding<Bool>) {
         self.detectedPeople = detectedPeople
@@ -175,27 +207,44 @@ struct PosePanel: View {
         _group = State(initialValue: PeopleGroup(count: detectedPeople))
     }
 
+    private var ideas: [PoseIdea] {
+        PoseLibrary.ideas(for: group, category: category, search: search)
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if detectedPeople > 0 {
-                        Label("Detecté \(detectedPeople) \(detectedPeople == 1 ? "persona" : "personas")",
-                              systemImage: "person.crop.rectangle")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("describe tu toma", text: $search)
+                            .textInputAutocapitalization(.never)
                     }
+                    .padding(.horizontal, 14)
+                    .frame(height: 42)
+                    .background(Capsule().fill(Color.white.opacity(0.1)))
+
                     Picker("Personas", selection: $group) {
                         ForEach(PeopleGroup.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
 
-                    if group == .solo {
-                        Text("¿Qué quieres mostrar?").font(.subheadline.weight(.semibold))
-                        Picker("Enfoque", selection: $focus) {
-                            ForEach(PoseFocus.allCases) { Text($0.title).tag($0) }
+                    if group == .solo && search.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(PoseCategory.allCases) { item in
+                                    Button { category = item } label: {
+                                        Text(item.title)
+                                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(category == item ? Color.black : Color.white)
+                                            .padding(.horizontal, 14)
+                                            .frame(height: 34)
+                                            .background(Capsule().fill(category == item ? Color(white: 0.92) : Color.white.opacity(0.1)))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                         }
-                        .pickerStyle(.segmented)
                     }
 
                     Toggle(isOn: $autoShot) {
@@ -207,19 +256,25 @@ struct PosePanel: View {
                     }
                     .tint(.yellow)
 
-                    ForEach(PoseLibrary.ideas(for: group, focus: focus)) { pose in
-                        Button {
-                            selected = pose
-                            dismiss()
-                        } label: {
-                            PoseCard(pose: pose, isSelected: selected == pose)
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                        ForEach(ideas) { pose in
+                            Button {
+                                selected = pose
+                                dismiss()
+                            } label: {
+                                PoseCard(pose: pose, isSelected: selected == pose)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                    }
+                    if ideas.isEmpty {
+                        Text("No encontré poses con esa búsqueda.")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 .padding(16)
             }
-            .navigationTitle("Poses")
+            .navigationTitle("Elige una pose")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -227,7 +282,8 @@ struct PosePanel: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.large])
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -236,22 +292,29 @@ private struct PoseCard: View {
     let isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: pose.symbol)
-                .font(.system(size: 26))
-                .frame(width: 52, height: 52)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Color.yellow.opacity(0.18)))
-                .foregroundStyle(Color.yellow)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(pose.title).font(.headline)
-                Text(pose.detail).font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.17), Color(white: 0.08)], startPoint: .top, endPoint: .bottom))
+                if let image = pose.image {
+                    Image(uiImage: image).resizable().scaledToFit().padding(8)
+                } else {
+                    Image(systemName: pose.symbol)
+                        .font(.system(size: 46))
+                        .foregroundStyle(Color(white: 0.85))
+                }
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.yellow, lineWidth: 2)
+                }
             }
-            Spacer(minLength: 0)
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.yellow)
+            .frame(height: 190)
+            Text(pose.title).font(.system(size: 14, weight: .semibold, design: .rounded))
+            if let inspiration = pose.inspiration {
+                Text(inspiration)
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(.yellow.opacity(0.85))
+                    .lineLimit(2)
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.secondarySystemBackground)))
     }
 }
