@@ -66,18 +66,9 @@ struct DialPicker<Item: Hashable>: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.yellow))
 
             GeometryReader { geo in
-                let center = geo.size.width / 2
-                let anchor = CGFloat(dragStartIndex ?? selectedIndex)
                 ZStack {
-                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-                        let x = (CGFloat(index) - anchor) * spacing + dragTranslation
-                        let distance = abs(x) / spacing
-                        DialItem(icon: icon(item), isSelected: item == selected)
-                            .scaleEffect(max(0.62, 1 - distance * 0.11))
-                            .opacity(max(0.12, 1 - distance * 0.24))
-                            .offset(y: distance * distance * 1.6)
-                            .position(x: center + x, y: geo.size.height / 2)
-                            .onTapGesture { choose(index) }
+                    ForEach(0..<items.count, id: \.self) { index in
+                        dialItem(at: index, size: geo.size)
                     }
                 }
             }
@@ -103,6 +94,23 @@ struct DialPicker<Item: Hashable>: View {
                     dragTranslation = 0
                 }
             }
+    }
+
+    /// Cada círculo se encoge y se desvanece según su distancia al centro (efecto de rueda).
+    private func dialItem(at index: Int, size: CGSize) -> some View {
+        let anchor: CGFloat = CGFloat(dragStartIndex ?? selectedIndex)
+        let x: CGFloat = (CGFloat(index) - anchor) * spacing + dragTranslation
+        let distance: CGFloat = abs(x) / spacing
+        let scale: CGFloat = max(0.62, 1 - distance * 0.11)
+        let fade: Double = Double(max(0.12, 1 - distance * 0.24))
+        let lift: CGFloat = distance * distance * 1.6
+        let item = items[index]
+        return DialItem(icon: icon(item), isSelected: item == selected)
+            .scaleEffect(scale)
+            .opacity(fade)
+            .offset(y: lift)
+            .position(x: size.width / 2 + x, y: size.height / 2)
+            .onTapGesture { choose(index) }
     }
 
     private func clamp(_ index: Int) -> Int {
