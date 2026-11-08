@@ -85,11 +85,11 @@ struct TextSpec: Equatable {
     var cacheKey: String { "\(text)|\(font.rawValue)|\(color.keyString)|\(background.rawValue)" }
 }
 
-/// Marca personal tipo Garmin: silueta + ARTHUR + datos.
+/// Marca personal tipo Garmin: silueta + ARTHVR + datos.
 struct MarkSpec: Equatable {
     var silhouette: String
     var color: UIColor
-    var title: String = "ARTHUR"
+    var title: String = "ARTHVR"
     var subtitle: String
 
     var cacheKey: String { "\(silhouette)|\(color.keyString)|\(title)|\(subtitle)" }

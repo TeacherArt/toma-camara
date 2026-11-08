@@ -53,6 +53,7 @@ enum StickerCatalog {
     ]
 
     static let siluetas: [StickerItem] = [
+        StickerItem(name: "sil_ar27", title: "AR27"),
         StickerItem(name: "sil_gato_perfil", title: "Gato"),
         StickerItem(name: "sil_gato_maestro", title: "Maestro"),
         StickerItem(name: "sil_gato_gym", title: "Gym"),

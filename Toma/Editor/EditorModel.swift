@@ -307,12 +307,13 @@ final class EditorModel: ObservableObject {
         guard rect.width > 0, rect.height > 0 else { return nil }
         var edited = adjust.apply(to: image.cropped(to: rect), includeExposure: applyExposure)
         edited = style.apply(to: edited)
-        guard var cg = context.createCGImage(edited, from: rect, format: .RGBA8,
+        guard let cg = context.createCGImage(edited, from: rect, format: .RGBA8,
                                              colorSpace: CGColorSpace(name: CGColorSpace.displayP3)) else { return nil }
-        if let overlays, !overlays.isEmpty {
-            cg = OverlayRenderer.composite(overlays, onto: cg)
-        }
-        return FrameRenderer.render(photo: cg, frame: frame, info: info, styleName: style.title)
+        let framed = FrameRenderer.render(photo: cg, frame: frame, info: info, styleName: style.title)
+        // Los stickers van sobre toda la imagen (también sobre el marco), en cualquier lugar.
+        guard let overlays, !overlays.isEmpty else { return framed }
+        let image = OverlayRenderer.composite(overlays, onto: framed.image, opaque: !frame.isTransparent)
+        return FramedImage(image: image, photoRect: framed.photoRect)
     }
 
     private func makeThumbs() {

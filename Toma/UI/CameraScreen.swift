@@ -16,11 +16,10 @@ struct CameraScreen: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 topBar
                 previewArea
-                StyleStrip(selected: cam.style) { cam.style = $0 }
-                    .opacity(cam.mode == .video && cam.flatVideo ? 0.35 : 1)
+                Spacer(minLength: 0)
                 ModeSwitcher(selected: cam.mode) { cam.setMode($0) }
                 bottomBar
             }
@@ -178,7 +177,15 @@ struct CameraScreen: View {
                 }
                 Spacer()
                 ZoomPills(stops: cam.zoomStops, current: cam.zoomDisplay) { cam.setZoom($0) }
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 6)
+                DialPicker(items: LookStyle.allCases.filter { $0 != .plano },
+                           selected: cam.style,
+                           title: { $0.title },
+                           icon: { $0.icon },
+                           onSelect: { cam.style = $0 })
+                    .opacity(cam.mode == .video && cam.flatVideo ? 0.35 : 1)
+                    .disabled(cam.mode == .video && cam.flatVideo)
+                    .padding(.bottom, 10)
             }
 
             if cam.mode == .raw {

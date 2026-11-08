@@ -40,31 +40,113 @@ struct PillToggle: View {
     }
 }
 
-struct StyleStrip: View {
-    let selected: LookStyle
-    let onSelect: (LookStyle) -> Void
+/// Ruedita como la de "Studio Light" del iPhone: se desliza con el dedo, cambia en vivo,
+/// vibra en cada paso y muestra el nombre del elegido en una etiqueta amarilla.
+struct DialPicker<Item: Hashable>: View {
+    let items: [Item]
+    let selected: Item
+    let title: (Item) -> String
+    let icon: (Item) -> String
+    let onSelect: (Item) -> Void
+    var spacing: CGFloat = 56
+
+    @State private var dragStartIndex: Int?
+    @State private var dragTranslation: CGFloat = 0
+
+    private var selectedIndex: Int { items.firstIndex(of: selected) ?? 0 }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 20) {
-                    ForEach(LookStyle.allCases.filter { $0 != .plano }) { style in
-                        Button { onSelect(style) } label: {
-                            Text(style.title)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .tracking(1.2)
-                                .foregroundStyle(style == selected ? Color.yellow : Color.white.opacity(0.55))
-                        }
-                        .id(style)
+        VStack(spacing: 8) {
+            Text(title(selected).uppercased())
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .tracking(0.5)
+                .foregroundStyle(.black)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.yellow))
+
+            GeometryReader { geo in
+                let center = geo.size.width / 2
+                let anchor = CGFloat(dragStartIndex ?? selectedIndex)
+                ZStack {
+                    ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                        let x = (CGFloat(index) - anchor) * spacing + dragTranslation
+                        let distance = abs(x) / spacing
+                        DialItem(icon: icon(item), isSelected: item == selected)
+                            .scaleEffect(max(0.62, 1 - distance * 0.11))
+                            .opacity(max(0.12, 1 - distance * 0.24))
+                            .offset(y: distance * distance * 1.6)
+                            .position(x: center + x, y: geo.size.height / 2)
+                            .onTapGesture { choose(index) }
                     }
                 }
-                .padding(.horizontal, 20)
             }
-            .onChange(of: selected) { _, style in
-                withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(style, anchor: .center) }
-            }
+            .frame(height: 52)
+            .contentShape(Rectangle())
+            .gesture(drag)
         }
-        .frame(height: 26)
+    }
+
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                if dragStartIndex == nil { dragStartIndex = selectedIndex }
+                dragTranslation = value.translation.width
+                let start = CGFloat(dragStartIndex ?? selectedIndex)
+                live(clamp(Int((start - dragTranslation / spacing).rounded())))
+            }
+            .onEnded { value in
+                let start = CGFloat(dragStartIndex ?? selectedIndex)
+                live(clamp(Int((start - value.predictedEndTranslation.width / spacing).rounded())))
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                    dragStartIndex = nil
+                    dragTranslation = 0
+                }
+            }
+    }
+
+    private func clamp(_ index: Int) -> Int {
+        min(max(index, 0), items.count - 1)
+    }
+
+    private func live(_ index: Int) {
+        guard items.indices.contains(index), items[index] != selected else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        onSelect(items[index])
+    }
+
+    private func choose(_ index: Int) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) { live(index) }
+    }
+}
+
+private struct DialItem: View {
+    let icon: String
+    let isSelected: Bool
+
+    var body: some View {
+        ZStack {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.black.opacity(0.35))
+                    .frame(width: 46, height: 46)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.yellow, lineWidth: 2.5)
+                    .frame(width: 46, height: 46)
+            } else {
+                Circle()
+                    .fill(Color.black.opacity(0.25))
+                    .frame(width: 38, height: 38)
+                Circle()
+                    .stroke(Color.white.opacity(0.75), lineWidth: 1.2)
+                    .frame(width: 38, height: 38)
+            }
+            Image(systemName: icon)
+                .font(.system(size: isSelected ? 18 : 15, weight: .semibold))
+                .foregroundStyle(isSelected ? Color.yellow : Color.white)
+        }
+        .frame(width: 50, height: 50)
+        .contentShape(Rectangle())
     }
 }
 
@@ -102,33 +184,41 @@ struct ZoomPills: View {
     }
 }
 
-/// Selector de modos que se desliza y centra el modo activo, como en la cámara del iPhone.
+/// Selector de modos en cápsula (como la cámara de iOS 26): el modo activo queda al centro,
+/// dentro de una pastilla; se desliza con el dedo o se toca.
 struct ModeSwitcher: View {
     let selected: CaptureMode
     let onSelect: (CaptureMode) -> Void
-    private let itemWidth: CGFloat = 76
+    private let itemWidth: CGFloat = 92
 
     var body: some View {
         GeometryReader { geo in
             let modes = CaptureMode.allCases
             let index = CGFloat(modes.firstIndex(of: selected) ?? 0)
-            HStack(spacing: 0) {
-                ForEach(modes) { mode in
-                    Text(mode.title)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .tracking(1.5)
-                        .foregroundStyle(mode == selected ? Color.yellow : Color.white.opacity(0.55))
-                        .frame(width: itemWidth, height: 30)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onSelect(mode) }
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(width: itemWidth, height: 38)
+                    .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                HStack(spacing: 0) {
+                    ForEach(modes) { mode in
+                        Text(mode.title)
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .tracking(0.8)
+                            .foregroundStyle(mode == selected ? Color.yellow : Color.white.opacity(0.75))
+                            .frame(width: itemWidth, height: geo.size.height)
+                            .contentShape(Rectangle())
+                            .onTapGesture { onSelect(mode) }
+                    }
                 }
+                .offset(x: geo.size.width / 2 - itemWidth / 2 - index * itemWidth)
+                .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selected)
             }
-            .offset(x: geo.size.width / 2 - itemWidth / 2 - index * itemWidth)
-            .animation(.spring(response: 0.35, dampingFraction: 0.85), value: selected)
         }
-        .frame(height: 30)
-        .clipped()
-        .contentShape(Rectangle())
+        .frame(width: 290, height: 48)
+        .background(Capsule().fill(Color.white.opacity(0.08)))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
         .gesture(
             DragGesture(minimumDistance: 12)
                 .onEnded { value in

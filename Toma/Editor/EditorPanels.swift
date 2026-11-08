@@ -196,8 +196,8 @@ struct TextPanel: View {
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    QuickChip(title: "ARTHUR", icon: "crown.fill") {
-                        add(TextSpec(text: "ARTHUR", font: .avenir, color: .white), border: .none, at: CGPoint(x: 0.5, y: 0.15))
+                    QuickChip(title: "ARTHVR", icon: "crown.fill") {
+                        add(TextSpec(text: "ARTHVR", font: .avenir, color: .white), border: .none, at: CGPoint(x: 0.5, y: 0.15))
                     }
                     QuickChip(title: "Hora", icon: "clock") {
                         let date = model.isVideo ? Date() : model.info.date
@@ -228,7 +228,7 @@ struct TextPanel: View {
                         addMagazineWhenReady()
                     }
                     QuickChip(title: "Cuentas", icon: "circle.grid.3x3.fill") {
-                        add(TextSpec(text: "ARTHUR", font: .cuentas, color: .black), border: .none, at: CGPoint(x: 0.5, y: 0.5))
+                        add(TextSpec(text: "ARTHVR", font: .cuentas, color: .black), border: .none, at: CGPoint(x: 0.5, y: 0.5))
                     }
                 }
                 .padding(.horizontal, 20)
@@ -317,7 +317,8 @@ struct StickerPanel: View {
 
 struct MarkPanel: View {
     @ObservedObject var model: EditorModel
-    @State private var silhouette = "sil_gato_perfil"
+    @State private var silhouette = "sil_ar27"
+    @State private var title = "ARTHVR"
     @State private var color: Color = .white
     @State private var showPlace = false
     @State private var showTime = true
@@ -354,6 +355,13 @@ struct MarkPanel: View {
                     ColorPicker("", selection: $color, supportsOpacity: false)
                         .labelsHidden()
                         .frame(width: 30)
+                    Menu {
+                        ForEach(["ARTHVR", "ARTHUR", "AR27", "HYBRID ATHLETE"], id: \.self) { name in
+                            Button(name) { title = name; apply() }
+                        }
+                    } label: {
+                        ChipLabel(title: title, icon: "textformat")
+                    }
                     Toggle("Lugar", isOn: $showPlace).toggleStyle(.button)
                     Toggle("Hora", isOn: $showTime).toggleStyle(.button)
                     Toggle("Cámara", isOn: $showSpecs).toggleStyle(.button)
@@ -396,7 +404,8 @@ struct MarkPanel: View {
             let specs = model.specsText()
             if !specs.isEmpty { parts.append(specs) }
         }
-        model.setMark(MarkSpec(silhouette: silhouette, color: UIColor(color), subtitle: parts.joined(separator: " · ")))
+        model.setMark(MarkSpec(silhouette: silhouette, color: UIColor(color), title: title,
+                               subtitle: parts.joined(separator: " · ")))
     }
 }
 
@@ -430,7 +439,7 @@ struct SelectionBar: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 200)
-                Slider(value: sizeBinding(selected), in: 0.06...1.4)
+                Slider(value: sizeBinding(selected), in: 0.05...2.5)
                     .tint(.yellow)
                 if selected.content.isText {
                     Button { onEditText(selected) } label: {

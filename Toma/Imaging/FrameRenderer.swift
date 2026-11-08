@@ -115,7 +115,7 @@ enum FrameRenderer {
             ctx.fill(CGRect(origin: .zero, size: size))
             photo.draw(in: rect)
             let top = h + side
-            drawText("ARTHUR · TOMA", font: big, color: ink, x: side, y: top + bottom * 0.22, anchor: .left)
+            drawText("ARTHVR · AR27", font: big, color: ink, x: side, y: top + bottom * 0.22, anchor: .left)
             drawText(dateText(info.date, "dd.MM.yyyy  HH:mm"), font: small, color: softInk,
                      x: side, y: top + bottom * 0.56, anchor: .left)
             drawText(exif, font: big, color: ink, x: size.width - side, y: top + bottom * 0.22, anchor: .right)
@@ -213,7 +213,7 @@ enum FrameRenderer {
             paper.setFill()
             path.fill()
 
-            drawText("ARTHUR RECEIPT", font: titleFont, color: ink, x: width / 2, y: titleY, anchor: .center, kern: w * 0.008)
+            drawText("ARTHVR RECEIPT", font: titleFont, color: ink, x: width / 2, y: titleY, anchor: .center, kern: w * 0.008)
             drawText(dateText(info.date, "EEEE d MMM yyyy").uppercased(), font: subFont, color: softInk,
                      x: width / 2, y: subY, anchor: .center)
             photo.draw(in: rect)

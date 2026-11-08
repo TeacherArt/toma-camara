@@ -23,6 +23,22 @@ enum LookStyle: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Ícono para la ruedita de estilos.
+    var icon: String {
+        switch self {
+        case .natural: return "circle"
+        case .film: return "film"
+        case .g7x: return "camera.fill"
+        case .glow: return "sparkles"
+        case .dusk: return "sun.horizon.fill"
+        case .harbor: return "water.waves"
+        case .noche: return "moon.stars.fill"
+        case .relic: return "hourglass"
+        case .mono: return "circle.lefthalf.filled"
+        case .plano: return "minus.circle"
+        }
+    }
+
     /// `grainOffset` mueve el grano de un cuadro a otro para que en video no se vea fijo.
     func apply(to input: CIImage, grainOffset: CGPoint = .zero) -> CIImage {
         let extent = input.extent

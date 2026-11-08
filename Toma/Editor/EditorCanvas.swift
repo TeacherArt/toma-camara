@@ -1,21 +1,20 @@
 import AVFoundation
 import SwiftUI
 
-/// Vista previa con los elementos encima. Se arrastran con un dedo;
-/// con dos dedos (pellizcar y girar) se cambia el tamaño y el giro del elemento elegido.
+/// Vista previa con los elementos encima. Se arrastran con un dedo a cualquier parte
+/// (también sobre el marco); con dos dedos, en cualquier punto de la pantalla,
+/// se cambia el tamaño y el giro del elemento elegido.
 struct EditorCanvas: View {
     @ObservedObject var model: EditorModel
     let onEditText: (EditorOverlay) -> Void
     @State private var pinchStart: CGFloat?
     @State private var rotateStart: Double?
 
+    static let sizeRange: ClosedRange<CGFloat> = 0.05...3.0
+
     var body: some View {
         GeometryReader { geo in
             let content = contentRect(in: geo.size)
-            let photo = CGRect(x: content.minX + model.photoRect.minX * content.width,
-                               y: content.minY + model.photoRect.minY * content.height,
-                               width: model.photoRect.width * content.width,
-                               height: model.photoRect.height * content.height)
             ZStack(alignment: .topLeading) {
                 Color.black.opacity(0.001)
                     .onTapGesture { model.selectedID = nil }
@@ -24,10 +23,10 @@ struct EditorCanvas: View {
                     .frame(width: content.width, height: content.height)
                     .position(x: content.midX, y: content.midY)
 
-                OverlayLayer(model: model, box: photo.size, onEditText: onEditText)
-                    .frame(width: photo.width, height: photo.height)
+                OverlayLayer(model: model, box: content.size, onEditText: onEditText)
+                    .frame(width: content.width, height: content.height)
                     .clipped()
-                    .position(x: photo.midX, y: photo.midY)
+                    .position(x: content.midX, y: content.midY)
             }
             .simultaneousGesture(pinch)
             .simultaneousGesture(rotate)
@@ -68,9 +67,12 @@ struct EditorCanvas: View {
     private var pinch: some Gesture {
         MagnifyGesture()
             .onChanged { value in
+                // Si no hay nada elegido, se toma el último elemento agregado.
+                if model.selected == nil, let last = model.overlays.last { model.selectedID = last.id }
                 guard var overlay = model.selected else { return }
                 if pinchStart == nil { pinchStart = overlay.size }
-                overlay.size = min(max((pinchStart ?? overlay.size) * value.magnification, 0.06), 1.6)
+                let range = Self.sizeRange
+                overlay.size = min(max((pinchStart ?? overlay.size) * value.magnification, range.lowerBound), range.upperBound)
                 model.update(overlay)
             }
             .onEnded { _ in pinchStart = nil }
@@ -79,6 +81,7 @@ struct EditorCanvas: View {
     private var rotate: some Gesture {
         RotateGesture()
             .onChanged { value in
+                if model.selected == nil, let last = model.overlays.last { model.selectedID = last.id }
                 guard var overlay = model.selected else { return }
                 if rotateStart == nil { rotateStart = overlay.rotation }
                 overlay.rotation = (rotateStart ?? overlay.rotation) + value.rotation.radians
@@ -165,9 +168,10 @@ private struct OverlayItemView: View {
                 }
                 guard let start = dragStart, box.width > 0, box.height > 0 else { return }
                 var moved = overlay
+                // Puede salirse un poco del borde (para cortes creativos), sin perderse.
                 moved.center = CGPoint(
-                    x: min(max(start.x + value.translation.width / box.width, 0), 1),
-                    y: min(max(start.y + value.translation.height / box.height, 0), 1)
+                    x: min(max(start.x + value.translation.width / box.width, -0.3), 1.3),
+                    y: min(max(start.y + value.translation.height / box.height, -0.3), 1.3)
                 )
                 onChange(moved)
             }

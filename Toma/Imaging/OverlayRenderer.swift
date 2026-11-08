@@ -150,15 +150,14 @@ enum OverlayRenderer {
 
     // MARK: Composición final
 
-    /// Dibuja los elementos sobre la foto (para guardar la imagen final).
-    static func composite(_ overlays: [EditorOverlay], onto photo: CGImage) -> CGImage {
-        guard !overlays.isEmpty else { return photo }
-        let size = CGSize(width: photo.width, height: photo.height)
-        let image = renderer(size, opaque: true).image { ctx in
-            UIImage(cgImage: photo).draw(in: CGRect(origin: .zero, size: size))
+    /// Dibuja los elementos sobre la imagen terminada (foto con marco) para guardarla.
+    static func composite(_ overlays: [EditorOverlay], onto base: UIImage, opaque: Bool) -> UIImage {
+        guard !overlays.isEmpty else { return base }
+        let size = CGSize(width: base.size.width * base.scale, height: base.size.height * base.scale)
+        return renderer(size, opaque: opaque).image { ctx in
+            base.draw(in: CGRect(origin: .zero, size: size))
             draw(overlays, in: ctx.cgContext, size: size)
         }
-        return image.cgImage ?? photo
     }
 
     /// Solo los elementos, sobre fondo transparente (para video).

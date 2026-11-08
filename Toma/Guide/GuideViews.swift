@@ -27,7 +27,7 @@ struct GuideOverlay: View {
                         Spacer()
                     }
                     .padding(.horizontal, 12)
-                    .padding(.bottom, 62)
+                    .padding(.bottom, 150)
                 }
                 .padding(.top, 10)
 
