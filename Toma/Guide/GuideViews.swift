@@ -177,6 +177,8 @@ struct ActivePoseChip: View {
 struct PoseGhost: View {
     let image: UIImage
     let mirrored: Bool
+    /// Las poses de medio cuerpo (close-up) se pegan al borde de abajo, como en el cuadro real.
+    var anchorBottom = false
 
     var body: some View {
         Image(uiImage: image)
@@ -184,8 +186,9 @@ struct PoseGhost: View {
             .scaledToFit()
             .scaleEffect(x: mirrored ? -1 : 1, y: 1)
             .opacity(0.42)
-            .padding(.top, 70)
-            .padding(.bottom, 120)
+            .padding(.top, anchorBottom ? 90 : 70)
+            .padding(.bottom, anchorBottom ? 0 : 120)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
             .allowsHitTesting(false)
     }
 }

@@ -158,7 +158,7 @@ struct CameraScreen: View {
             if cam.dualFormat && cam.mode != .raw && !cam.guideOn { DualGuides() }
 
             if let pose = activePose, showGhost, let ghost = pose.image {
-                PoseGhost(image: ghost, mirrored: mirrorGhost)
+                PoseGhost(image: ghost, mirrored: mirrorGhost, anchorBottom: pose.categories.contains(.closeUp))
             }
 
             if cam.guideOn {
